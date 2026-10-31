@@ -1,0 +1,12 @@
+services:
+  db:
+    image: postgres:16
+    environment: {POSTGRES_USER: bl, POSTGRES_PASSWORD: bl, POSTGRES_DB: brightloop}
+    ports: ["5432:5432"]
+  api:
+    build: .
+    environment:
+      DATABASE_URL: postgresql+psycopg2://bl:bl@db:5432/brightloop
+      SECRET_KEY: change-me
+    ports: ["8000:8000"]
+    depends_on: [db]
