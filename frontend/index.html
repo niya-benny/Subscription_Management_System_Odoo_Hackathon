@@ -1,0 +1,119 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Brightloop Billing</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+:root{--bg:#f6f7fb;--sf:#fff;--tx:#161a2b;--mu:#6b7285;--bd:#e3e6ef;--ac:#5b4bff;--ok:#12a36b;--bad:#e5484d;--wa:#d98a00}
+@media(prefers-color-scheme:dark){:root{--bg:#0f1220;--sf:#181c30;--tx:#eceefa;--mu:#9aa1ba;--bd:#2a2f4a;--ac:#8b7fff}}
+*{box-sizing:border-box}body{margin:0;font:14px system-ui,sans-serif;background:var(--bg);color:var(--tx)}
+.wrap{display:flex;min-height:100vh}.side{width:200px;background:var(--sf);border-right:1px solid var(--bd);padding:16px;flex-shrink:0}
+.side h2{margin:0 0 16px;font-size:18px;color:var(--ac)}.side a{display:block;padding:9px 10px;border-radius:8px;cursor:pointer;color:var(--mu);margin-bottom:2px}
+.side a.on,.side a:hover{background:var(--bg);color:var(--tx)}main{flex:1;padding:20px;min-width:0}
+.card{background:var(--sf);border:1px solid var(--bd);border-radius:12px;padding:16px;margin-bottom:16px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px}.kpi{background:var(--sf);border:1px solid var(--bd);border-radius:12px;padding:14px}
+.kpi b{display:block;font-size:22px;margin-top:4px}.kpi span{color:var(--mu);font-size:12px}
+.tw{overflow-x:auto}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px;border-bottom:1px solid var(--bd);white-space:nowrap}th{color:var(--mu);font-weight:500;font-size:12px}
+input,select,button{font:inherit;padding:8px 10px;border-radius:8px;border:1px solid var(--bd);background:var(--sf);color:var(--tx)}
+button{cursor:pointer;background:var(--ac);color:#fff;border:0}button.g{background:var(--bg);color:var(--tx);border:1px solid var(--bd)}button.r{background:var(--bad)}button.s{padding:4px 8px;font-size:12px;margin-right:4px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;align-items:end}label{display:block;font-size:12px;color:var(--mu);margin-bottom:3px}label input,label select{width:100%}
+.b{padding:2px 8px;border-radius:99px;font-size:11px;background:var(--bg);border:1px solid var(--bd)}.Active,.Paid{color:var(--ok)}.Cancelled,.Overdue{color:var(--bad)}.Paused,.Confirmed,.Quotation{color:var(--wa)}
+#toast{position:fixed;bottom:20px;right:20px;background:var(--tx);color:var(--bg);padding:10px 16px;border-radius:10px;display:none;z-index:9;max-width:420px}
+.auth{max-width:380px;margin:8vh auto;padding:0 16px}.auth .card>*{margin-bottom:10px}.auth input{width:100%}
+.modal{position:fixed;inset:0;background:#0007;display:flex;align-items:center;justify-content:center;z-index:5}.modal .card{width:min(560px,94vw);max-height:90vh;overflow:auto;margin:0}
+h3{margin:0 0 12px;font-size:15px}.row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center}
+@media(max-width:700px){.wrap{flex-direction:column}.side{width:100%;display:flex;gap:4px;overflow-x:auto;padding:8px}.side h2{display:none}.side a{white-space:nowrap}}
+@media print{.side,#toast,.np{display:none!important}main>*:not(.modal){display:none}.modal{position:static;background:none}}
+</style></head><body><div id="app"></div><div id="toast"></div>
+<script>
+const $=s=>document.querySelector(s),v=i=>$('#'+i).value,esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const m=n=>'₹'+Number(n||0).toLocaleString('en-IN',{maximumFractionDigits:2}),today=()=>new Date().toISOString().slice(0,10);
+const addD=(d,n)=>{const x=new Date(d);x.setDate(x.getDate()+n);return x.toISOString().slice(0,10)};
+function toast(t){const e=$('#toast');e.textContent=t;e.style.display='block';clearTimeout(toast.t);toast.t=setTimeout(()=>e.style.display='none',3200)}
+const ss=(k,val)=>{try{val===undefined?sessionStorage.removeItem(k):sessionStorage.setItem(k,val)}catch(e){}},sg=k=>{try{return sessionStorage.getItem(k)}catch(e){return null}};
+let API=sg('bl_api')||'http://127.0.0.1:8000',TOKEN=sg('bl_tok'),ME=JSON.parse(sg('bl_me')||'null'),V=sg('bl_v')||'dash',F={st:'all',q:'',page:1,sp:1},L=null;
+const SIZE=25;
+async function api(path,method='GET',body){
+ let r;try{r=await fetch(API+path,{method,headers:{'Content-Type':'application/json',...(TOKEN?{Authorization:'Bearer '+TOKEN}:{})},body:body!==undefined?JSON.stringify(body):undefined})}
+ catch(e){throw new Error('Cannot reach the API at '+API+'. Is the backend running?')}
+ let d=null;try{d=await r.json()}catch(e){}
+ if(!r.ok){if(r.status==401&&TOKEN){logout();throw new Error('Session expired, sign in again')}let t=d&&d.detail;if(Array.isArray(t))t=t.map(x=>(x.loc||[]).slice(1).join('.')+': '+x.msg).join('; ');throw new Error(t||r.statusText)}
+ return d}
+async function act(fn,ok){try{const r=await fn();if(ok)toast(ok);return r}catch(e){toast(e.message)}}
+function logout(){TOKEN=null;ME=null;L=null;ss('bl_tok');ss('bl_me');authView()}
+const staff=()=>ME&&ME.role!='customer';
+/* ---------- AUTH ---------- */
+function authView(mode='in',msg=''){$('#app').innerHTML=`<div class="auth"><h2 style="color:var(--ac)">Brightloop Billing</h2><div class="card"><h3>${{up:'Create account',fp:'Forgot password',rs:'Set new password',in:'Sign in'}[mode]}</h3>
+${mode=='up'?'<input id="nm" placeholder="Company / name">':''}${mode=='rs'?'<input id="tk" placeholder="Reset token">':'<input id="em" placeholder="Email" type="email">'}${mode=='fp'?'':`<input id="pw" placeholder="${mode=='rs'?'New password':'Password'}" type="password">`}
+<button style="width:100%" onclick="${{up:'signup',fp:'forgot',rs:'resetPw',in:'login'}[mode]}()">${{up:'Sign up',fp:'Send reset link',rs:'Update password',in:'Sign in'}[mode]}</button>
+<div style="font-size:12px;color:var(--mu)">${mode=='in'?`<a href="#" onclick="authView('up');return false">Create account</a> · <a href="#" onclick="authView('fp');return false">Forgot password?</a> · <a href="#" onclick="authView('rs');return false">Have a token?</a>`:'<a href="#" onclick="authView();return false">Back to sign in</a>'}</div>${msg?`<div style="font-size:12px;color:var(--ok)">${esc(msg)}</div>`:''}</div>
+<div class="card" style="font-size:12px;color:var(--mu)"><label>API URL</label><input id="api" value="${esc(API)}" onchange="API=this.value.trim().replace(/\\/$/,'');ss('bl_api',API)"><br><br><b>Demo logins</b><br>admin@brightloop.io / Admin@12345<br>staff@brightloop.io / Staff@12345<br>acme@shop.com / Cust@12345</div></div>`}
+function begin(d,email){TOKEN=d.token;ME={role:d.role,name:d.name||email,email};V=d.role=='customer'?'portal':'dash';L=null;ss('bl_tok',TOKEN);ss('bl_me',JSON.stringify(ME));render()}
+const login=()=>act(async()=>{API=v('api').trim().replace(/\/$/,'');ss('bl_api',API);begin(await api('/auth/login','POST',{email:v('em').trim(),password:v('pw')}),v('em').trim())});
+const signup=()=>act(async()=>{API=v('api').trim().replace(/\/$/,'');begin(await api('/auth/signup','POST',{email:v('em').trim(),name:v('nm')||v('em'),password:v('pw')}),v('em').trim())});
+const forgot=()=>act(async()=>{const d=await api('/auth/forgot','POST',{email:v('em').trim()});authView('rs',d.detail+'. In this demo the link is printed in the backend terminal.')});
+const resetPw=()=>act(async()=>{await api('/auth/reset','POST',{token:v('tk').trim(),new_password:v('pw')});authView('in','Password updated. Sign in.')});
+/* ---------- SHELL ---------- */
+const NAV={admin:[['dash','Dashboard'],['subs','Subscriptions'],['invs','Invoices'],['pays','Payments'],['setup','Setup']],staff:[['dash','Dashboard'],['subs','Subscriptions'],['invs','Invoices'],['pays','Payments']],customer:[['portal','My account']]};
+const VIEWS={};
+async function lookups(force){if(L&&!force)return;const [plans,prods]=await Promise.all([api('/plans'),api('/products')]);L={plans:Object.fromEntries(plans.map(p=>[p.id,p])),planList:plans,prods,cust:{},tpls:[]};
+ if(staff()){const [c,t]=await Promise.all([api('/users/customers'),api('/templates')]);L.cust=Object.fromEntries(c.map(u=>[u.id,u]));L.tpls=t}}
+const cn=id=>L.cust[id]?.name||'Customer #'+id;
+async function render(){if(!TOKEN)return authView();try{await lookups();const html=await VIEWS[V]();ss('bl_v',V);
+ $('#app').innerHTML=`<div class="wrap"><div class="side"><h2>◎ Brightloop</h2>${NAV[ME.role].map(([k,l])=>`<a class="${V==k?'on':''}" onclick="V='${k}';F.page=1;F.sp=1;render()">${l}</a>`).join('')}<a onclick="logout()" style="margin-top:20px">Sign out<br><small>${esc(ME.email)} · ${ME.role}</small></a></div><main>${html}</main></div>`}catch(e){if(TOKEN)toast(e.message)}}
+const badge=s=>`<span class="b ${s}">${s}</span>`,tbl=(h,r)=>`<div class="tw"><table><tr>${h.map(x=>`<th>${x}</th>`).join('')}</tr>${r.join('')||'<tr><td colspan=9 style="color:var(--mu)">Nothing here yet</td></tr>'}</table></div>`;
+const fld=(i,l,t='text',val='')=>`<div><label>${l}</label><input id="${i}" type="${t}" value="${esc(val)}"></div>`,sel=(i,l,o)=>`<div><label>${l}</label><select id="${i}">${o.map(x=>`<option value="${esc(x[0])}">${esc(x[1])}</option>`).join('')}</select></div>`;
+const pager=(key,n)=>`<div class="row np" style="margin:12px 0 0"><button class="s g" ${F[key]<=1?'disabled':''} onclick="F.${key}--;render()">‹ Prev</button> Page ${F[key]} <button class="s g" ${n<SIZE?'disabled':''} onclick="F.${key}++;render()">Next ›</button></div>`;
+const prodOpts=()=>L.prods.flatMap(p=>p.variants.length?p.variants.map(x=>[p.id+'|'+x.id,p.name+' – '+x.value+' (+'+x.extra_price+')']):[[p.id+'|',p.name]]);
+const parseLine=(val,qty)=>{const[a,b]=val.split('|');return{product_id:+a,variant_id:b?+b:null,qty:+qty}};
+/* ---------- DASHBOARD ---------- */
+VIEWS.dash=async()=>{const[s,od]=await Promise.all([api('/reports/summary'),api('/invoices?overdue=true&size=50')]);
+ return`<h2>Finance overview</h2><div class="kpis"><div class="kpi"><span>Active subscriptions</span><b>${s.active_subscriptions}</b></div><div class="kpi"><span>MRR</span><b>${m(s.mrr)}</b></div><div class="kpi"><span>Revenue collected</span><b>${m(s.revenue_collected)}</b></div><div class="kpi"><span>Outstanding</span><b>${m(s.outstanding)}</b></div><div class="kpi"><span>Overdue</span><b style="color:var(--bad)">${s.overdue_count} · ${m(s.overdue_amount)}</b></div></div>
+<div class="card"><h3>Overdue invoices: chase these</h3>${tbl(['Invoice','Customer','Due','Balance'],od.map(i=>`<tr><td>${i.number}</td><td>${esc(cn(i.customer_id))}</td><td>${i.due_date}</td><td>${m(i.balance)}</td></tr>`))}</div>`};
+/* ---------- SUBSCRIPTIONS ---------- */
+const NEXT={Draft:'Quotation',Quotation:'Confirmed',Confirmed:'Active'};
+function subBtns(s){const pl=L.plans[s.plan_id]||{},b=(a,l,c='g')=>`<button class="s ${c}" onclick="subAct(${s.id},'${a}')">${l}</button>`;let h='';
+ if(staff()&&NEXT[s.status])h+=b('advance','→ '+NEXT[s.status],'');if(s.status=='Active'&&pl.pausable)h+=b('pause','Pause');if(s.status=='Paused')h+=b('resume','Resume');
+ if(['Active','Paused'].includes(s.status)&&pl.closable)h+=b('close','Close early','r');if(staff()&&s.status=='Closed'&&pl.renewable)h+=b('renew','Renew');return h}
+const subAct=(id,a)=>act(async()=>{await api(`/subscriptions/${id}/${a}`,'POST');render()});
+const mkSub=()=>act(async()=>{const body={customer_id:+v('sc'),start_date:v('ss'),expiry_date:v('sx')||null,payment_terms_days:+v('stt')};
+ if(v('st'))body.template_id=+v('st');else{body.plan_id=+v('sp');body.lines=[parseLine(v('spr'),v('sq'))]}
+ await api('/subscriptions','POST',body);render()},'Subscription created in Draft');
+VIEWS.subs=async()=>{const list=await api(`/subscriptions?page=${F.sp}&size=${SIZE}`);
+ return`<h2>Subscriptions</h2><div class="card np"><h3>New subscription / quotation</h3><div class="grid">${sel('sc','Customer',Object.values(L.cust).map(u=>[u.id,u.name]))}${sel('st','From template',[['','none'],...L.tpls.map(t=>[t.id,t.name+' ('+t.validity_days+'d valid)'])])}${sel('sp','Plan (if no template)',L.planList.map(p=>[p.id,p.name+' · '+p.period]))}${sel('spr','Product (if no template)',prodOpts())}${fld('sq','Quantity','number','1')}${fld('ss','Start date','date',today())}${fld('sx','Expiry','date',addD(today(),365))}${fld('stt','Payment terms (days)','number','15')}<button onclick="mkSub()">Create</button></div></div>
+<div class="card">${tbl(['No.','Customer','Plan','Start','Expiry','Next bill','Total','Status',''],list.map(s=>`<tr><td>${s.number}</td><td>${esc(cn(s.customer_id))}</td><td>${esc(s.plan)}</td><td>${s.start_date}</td><td>${s.expiry_date}</td><td>${s.status=='Active'?s.next_billing_date:'-'}</td><td>${m(s.total)}</td><td>${badge(s.status)}</td><td>${subBtns(s)}</td></tr>`))}${pager('sp',list.length)}</div>`};
+/* ---------- INVOICES ---------- */
+const invAct=(id,a)=>act(async()=>{await api(`/invoices/${id}/${a}`,'POST');render()},a=='send'?'Invoice marked as sent (email hook goes here)':'');
+const payOnline=(id,bal)=>act(async()=>{await api('/payments','POST',{invoice_id:id,method:'Online',amount:bal,paid_on:today(),note:'Customer portal'});render()},'Payment received. Thank you!');
+function invRow(i){const b=(a,l,c='g')=>`<button class="s ${c}" onclick="invAct(${i.id},'${a}')">${l}</button>`,st=i.overdue?'Overdue':i.status;
+ return`<tr><td>${i.number}</td><td>SUB-${i.subscription_id}</td>${staff()?`<td>${esc(cn(i.customer_id))}</td>`:''}<td>${i.invoice_date}</td><td>${i.due_date}</td><td>${m(i.total)}</td><td>${m(i.balance)}</td><td>${badge(st)}</td><td>${staff()?(i.status=='Draft'?b('confirm','Confirm',''):'')+(['Draft','Confirmed'].includes(i.status)?b('cancel','Cancel','r'):'')+b('send','Send'):''}<button class="s g" onclick="show(${i.id})">View/Print</button>${!staff()&&i.status=='Confirmed'?`<button class="s" onclick="payOnline(${i.id},${i.balance})">Pay online</button>`:''}</td></tr>`}
+const invHead=()=>['Invoice','Sub',...(staff()?['Customer']:[]),'Date','Due','Total','Balance','Status',''];
+const runBill=()=>act(async()=>{const d=await api('/billing/run','POST');toast(d.invoices_created+' invoice(s) generated');render()});
+VIEWS.invs=async()=>{const p=new URLSearchParams({page:F.page,size:SIZE});if(F.q)p.set('q',F.q);
+ if(F.st=='overdue')p.set('overdue','true');else if(F.st=='outstanding')p.set('outstanding','true');else if(F.st!='all')p.set('status',F.st);
+ const list=await api('/invoices?'+p);
+ return`<h2>Invoices</h2><div class="row np"><button onclick="runBill()">▶ Run billing now</button><select onchange="F.st=this.value;F.page=1;render()">${['all','Draft','outstanding','overdue','Paid','Cancelled'].map(x=>`<option ${F.st==x?'selected':''}>${x}</option>`).join('')}</select><input placeholder="Search invoice no." value="${esc(F.q)}" onchange="F.q=this.value;F.page=1;render()"></div><div class="card">${tbl(invHead(),list.map(invRow))}${pager('page',list.length)}<small style="color:var(--mu)">Billing is idempotent: the database allows one invoice per subscription per period.</small></div>`};
+const show=id=>act(async()=>{const i=await api('/invoices/'+id),d=document.createElement('div');d.className='modal';
+ d.innerHTML=`<div class="card"><h3>${i.number} ${badge(i.status)}</h3><p>${staff()?esc(cn(i.customer_id))+' · ':''}SUB-${i.subscription_id}<br>Date ${i.invoice_date} · Due ${i.due_date}</p>${tbl(['Item','Qty','Price','Net','Tax'],i.lines.map(l=>`<tr><td>${esc(l.description)}</td><td>${l.qty}</td><td>${m(l.unit_price)}</td><td>${m(l.net)}</td><td>${m(l.tax)}</td></tr>`))}${i.discount_notes?`<p>🏷 ${esc(i.discount_notes)}</p>`:''}<p>Untaxed ${m(i.untaxed)} · Tax ${m(i.tax)}<br><b>Total ${m(i.total)}</b> · Paid ${m(i.paid_amount)} · Balance ${m(i.balance)}</p><div class="np"><button onclick="window.print()">Print</button> <button class="g" onclick="this.closest('.modal').remove()">Close</button></div></div>`;$('main').appendChild(d)});
+/* ---------- PAYMENTS ---------- */
+const recPay=()=>act(async()=>{await api('/payments','POST',{invoice_id:+v('pi'),method:v('pm'),amount:+v('pa'),paid_on:v('pd'),note:v('pn')});render()},'Payment recorded');
+VIEWS.pays=async()=>{const[open,list]=await Promise.all([api('/invoices?outstanding=true&size=200'),api('/payments?size=50')]);
+ return`<h2>Payments</h2><div class="card np"><h3>Record payment</h3><div class="grid">${sel('pi','Invoice (Confirmed)',open.map(i=>[i.id,i.number+' · '+cn(i.customer_id)+' · balance '+m(i.balance)]))}${sel('pm','Method',['Bank transfer','Card','UPI','Cash','Cheque'].map(x=>[x,x]))}${fld('pa','Amount','number')}${fld('pd','Date','date',today())}${fld('pn','Note')}<button onclick="recPay()">Record</button></div></div>
+<div class="card">${tbl(['Date','Invoice ID','Method','Amount','Note'],list.map(p=>`<tr><td>${p.paid_on}</td><td>${p.invoice_id}</td><td>${esc(p.method)}</td><td>${m(p.amount)}</td><td>${esc(p.note)}</td></tr>`))}</div>`};
+/* ---------- CUSTOMER PORTAL ---------- */
+VIEWS.portal=async()=>{const[subs,invs]=await Promise.all([api('/subscriptions?size=100'),api('/invoices?size=100')]);
+ return`<h2>Welcome, ${esc(ME.name)}</h2><div class="card"><h3>My subscriptions</h3>${tbl(['No.','Plan','Expiry','Total','Status',''],subs.map(s=>`<tr><td>${s.number}</td><td>${esc(s.plan)}</td><td>${s.expiry_date}</td><td>${m(s.total)}</td><td>${badge(s.status)}</td><td>${subBtns(s)}</td></tr>`))}</div><div class="card"><h3>My invoices</h3>${tbl(invHead(),invs.map(invRow))}</div>`};
+/* ---------- ADMIN SETUP ---------- */
+const post=(path,body,ok)=>act(async()=>{await api(path,'POST',body);await lookups(true);render()},ok);
+const addProd=()=>post('/products',{name:v('pn1'),type:v('pt'),sales_price:+v('ps'),cost_price:+v('pc')||0,notes:v('pno'),variants:v('pv').split(',').filter(x=>x.includes(':')).map(x=>({attribute:'Brand',value:x.split(':')[0].trim(),extra_price:+x.split(':')[1]||0}))},'Product added');
+const addPlan=()=>post('/plans',{name:v('ln'),period:v('lp'),min_qty:+v('lq'),available_from:v('lf'),available_to:v('lt'),auto_close:v('lac')=='1',closable:v('lcl')=='1',pausable:v('lpa')=='1',renewable:v('lre')=='1'},'Plan added');
+const addDisc=()=>post('/discounts',{name:v('dn'),kind:v('dk'),value:+v('dv'),min_amount:+v('da')||0,min_qty:+v('dq')||1,start_date:v('df'),end_date:v('dt'),usage_limit:+v('dl')||1000000,product_id:v('dg')?+v('dg'):null},'Discount rule added');
+const addTax=()=>post('/taxes',{name:v('xn'),rate:+v('xr')},'Tax added');
+const addTpl=()=>post('/templates',{name:v('tn'),plan_id:+v('tpl'),validity_days:+v('td'),lines:[parseLine(v('tpr'),v('tq'))]},'Template added');
+const addStaff=()=>post('/staff',{name:v('fn'),email:v('fe'),password:v('fp')},'Staff member added');
+VIEWS.setup=async()=>{const[disc,taxes]=await Promise.all([api('/discounts'),api('/taxes')]);const yn=[['1','Yes'],['0','No']];
+ return`<h2>Setup <small style="color:var(--mu)">(admin only)</small></h2>
+<div class="card"><h3>Product</h3><div class="grid">${fld('pn1','Name')}${fld('pt','Type','text','Software')}${fld('ps','Sales price','number')}${fld('pc','Cost price','number')}${fld('pno','Notes')}${fld('pv','Variants (Odoo:560, Native:0)')}<button onclick="addProd()">Add</button></div><br>${tbl(['Product','Type','Sales','Cost','Variants'],L.prods.map(p=>`<tr><td>${esc(p.name)}</td><td>${esc(p.type)}</td><td>${m(p.sales_price)}</td><td>${m(p.cost_price)}</td><td>${p.variants.map(x=>esc(x.value)+' +'+x.extra_price).join(', ')||'-'}</td></tr>`))}</div>
+<div class="card"><h3>Plan</h3><div class="grid">${fld('ln','Name')}${sel('lp','Billing period',['daily','weekly','monthly','yearly'].map(x=>[x,x]))}${fld('lq','Min quantity','number','1')}${fld('lf','Available from','date',today())}${fld('lt','Available to','date',addD(today(),365))}${sel('lac','Auto-close at end',yn)}${sel('lcl','Closable early',yn)}${sel('lpa','Pausable',yn)}${sel('lre','Renewable',yn)}<button onclick="addPlan()">Add</button></div><br>${tbl(['Plan','Period','Min qty','Available','Auto-close','Closable','Pausable','Renewable'],L.planList.map(p=>`<tr><td>${esc(p.name)}</td><td>${p.period}</td><td>${p.min_qty}</td><td>${p.available_from} → ${p.available_to}</td><td>${p.auto_close?'✓':'-'}</td><td>${p.closable?'✓':'-'}</td><td>${p.pausable?'✓':'-'}</td><td>${p.renewable?'✓':'-'}</td></tr>`))}</div>
+<div class="card"><h3>Discount rule</h3><div class="grid">${fld('dn','Name')}${sel('dk','Type',[['percent','Percentage'],['fixed','Fixed amount']])}${fld('dv','Value','number')}${fld('da','Min purchase','number','0')}${fld('dq','Min quantity','number','1')}${fld('df','Start','date',today())}${fld('dt','End','date',addD(today(),90))}${fld('dl','Usage limit','number','100')}${sel('dg','Applies to',[['','All subscriptions'],...L.prods.map(p=>[p.id,'Product: '+p.name])])}<button onclick="addDisc()">Add</button></div><br>${tbl(['Rule','Value','Min qty','Valid','Used'],disc.map(d=>`<tr><td>${esc(d.name)}</td><td>${d.kind=='percent'?d.value+'%':m(d.value)}</td><td>${d.min_qty}</td><td>${d.start_date} → ${d.end_date}</td><td>${d.used_count}/${d.usage_limit}</td></tr>`))}</div>
+<div class="card"><h3>Tax &amp; quotation template</h3><div class="grid">${fld('xn','Tax name')}${fld('xr','Rate %','number')}<button onclick="addTax()">Add tax</button></div><p style="color:var(--mu)">Taxes: ${taxes.map(t=>esc(t.name)).join(', ')}. New subscription lines use the first tax.</p><div class="grid">${fld('tn','Template name')}${sel('tpl','Plan',L.planList.map(p=>[p.id,p.name]))}${sel('tpr','Product',prodOpts())}${fld('tq','Qty','number','1')}${fld('td','Valid days','number','30')}<button onclick="addTpl()">Add template</button></div></div>
+<div class="card"><h3>Add staff member</h3><div class="grid">${fld('fn','Name')}${fld('fe','Email','email')}${fld('fp','Password','password')}<button onclick="addStaff()">Add</button></div></div>`};
+render();
+</script></body></html>
